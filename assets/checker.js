@@ -15,18 +15,21 @@ let storageBroken = false;
 const pending = new Set();
 const $ = id => document.getElementById(id);
 function persist() {
-  if (storageBroken) { showStorageError(); return; }
-  try { savePlayers(localStorage, players); } catch { showStorageError(); }
+  try {
+    // После отказа проверяем доступ и JSON, не заменяя изменения в памяти.
+    if (storageBroken) loadPlayers(localStorage);
+    savePlayers(localStorage, players); storageBroken = false; return true;
+  } catch { storageBroken = true; showStorageError(); flash(t('storageMemory')); return false; }
 }
 function read() {
-  try { players = loadPlayers(localStorage); }
+  try { players = loadPlayers(localStorage); storageBroken = false; }
   catch { storageBroken = true; showStorageError(); }
 }
 function addPlayer(steamid, info = {}) {
   if (players.some(player => player.steamid === steamid)) { flash(t('duplicate')); return; }
   if (players.length >= 1000) { flash(t('limitPlayers')); return; }
   players.push({steamid, nickname:'', notes:'', status:'unknown', addedAt:Date.now(), ...info});
-  persist(); renderTracker(); flash(t('added'));
+  const saved = persist(); renderTracker(); if (saved) flash(t('added'));
 }
 function renderResult() {
   if (!currentPlayer) return;
@@ -82,9 +85,10 @@ function renderTracker() {
     if (player.nickname) row.append(el('div',{class:'player-id',text:player.steamid}));
     const label = el('label',{for:`note-${player.steamid}`,text:t('note')});
     const note = el('textarea',{id:`note-${player.steamid}`,maxlength:'2000','aria-label':`${t('note')} ${player.steamid}`}); note.value = player.notes;
-    const save = () => { if (player.notes !== note.value) { player.notes = note.value; persist(); } };
-    note.addEventListener('input',save); note.addEventListener('blur',save);
-    note.addEventListener('keydown',event => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); save(); note.blur(); flash(t('saved')); } });
+    const save = () => { player.notes = note.value; return persist(); };
+    const saveChanged = () => { if (player.notes !== note.value) save(); };
+    note.addEventListener('input',saveChanged); note.addEventListener('blur',saveChanged);
+    note.addEventListener('keydown',event => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); const saved = save(); note.blur(); if (saved) flash(t('saved')); } });
     row.append(label,note);
     const badge = el('span',{class:`badge ${player.status === 'online' ? 'status-online' : ''}`,text:t(player.status || 'unknown')});
     const actions = el('div',{class:'player-actions'});
@@ -96,7 +100,7 @@ function renderTracker() {
       finally { pending.delete(player.steamid); renderTracker(); }
     });
     const remove = el('button',{type:'button',class:'danger',text:t('remove'),'aria-label':`${t('remove')} ${player.steamid}`});
-    remove.addEventListener('click',() => { players = players.filter(item => item.steamid !== player.steamid); persist(); renderTracker(); flash(t('deleted')); });
+    remove.addEventListener('click',() => { players = players.filter(item => item.steamid !== player.steamid); const saved = persist(); renderTracker(); if (saved) flash(t('deleted')); });
     actions.append(badge,refresh,remove); row.append(actions);
     if (player.checkedAt) row.append(el('p',{class:'hint',text:t('checkedAt',{time:new Date(player.checkedAt).toLocaleTimeString(settings.language)})}));
     list.append(row);
@@ -135,6 +139,40 @@ function ocrUI(busy) {
   $('ocr-progress').hidden = !busy; $('ocr-button').disabled = busy || !file; $('dropzone').disabled = busy;
   $('file-input').disabled = busy;
 }
+async function ocrSources(input) {
+  const image = typeof createImageBitmap === 'function' ? await createImageBitmap(input) : await new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(input); const element = new Image();
+    element.onload = () => { URL.revokeObjectURL(url); resolve(element); };
+    element.onerror = () => { URL.revokeObjectURL(url); reject(new Error('imageDecode')); };
+    element.src = url;
+  });
+  try {
+    const width = image.width || image.naturalWidth; const height = image.height || image.naturalHeight;
+    const scale = Math.min(1.8, 1800 / Math.max(width, height));
+    const output = document.createElement('canvas');
+    output.width = Math.max(1, Math.round(width * scale)); output.height = Math.max(1, Math.round(height * scale * 0.4));
+    const context = output.getContext('2d', {willReadFrequently:true});
+    context.drawImage(image, 0, Math.round(height * -0.35), output.width, Math.round(height * scale));
+    const pixels = context.getImageData(0, 0, output.width, output.height);
+    const gray = new Uint8Array(output.width * output.height);
+    for (let i = 0; i < gray.length; i++) gray[i] = Math.round(pixels.data[i * 4] * .299 + pixels.data[i * 4 + 1] * .587 + pixels.data[i * 4 + 2] * .114);
+    const radius = 12;
+    for (let y = 0; y < output.height; y++) for (let x = 0; x < output.width; x++) {
+      let total = 0; let count = 0;
+      for (let dy = -radius; dy <= radius; dy += 6) for (let dx = -radius; dx <= radius; dx += 6) {
+        const xx = Math.max(0, Math.min(output.width - 1, x + dx)); const yy = Math.max(0, Math.min(output.height - 1, y + dy));
+        total += gray[yy * output.width + xx]; count++;
+      }
+      const value = gray[y * output.width + x] > total / count + 8 ? 0 : 255;
+      pixels.data[y * output.width * 4 + x * 4] = value;
+      pixels.data[y * output.width * 4 + x * 4 + 1] = value;
+      pixels.data[y * output.width * 4 + x * 4 + 2] = value;
+    }
+    context.putImageData(pixels, 0, 0);
+    const processed = await new Promise((resolve, reject) => output.toBlob(blob => blob ? resolve(blob) : reject(new Error('imageEncode')), 'image/png'));
+    return [input, processed];
+  } finally { image.close?.(); }
+}
 async function recognize() {
   if (!file || recognizing) return;
   const run = ++ocrRun; ocrUI(true); setError('checker-error',''); $('ocr-candidates').replaceChildren(); $('ocr-meter').value = 0; $('ocr-status').textContent = t('ocrLoading');
@@ -142,7 +180,7 @@ async function recognize() {
   const isCurrent = () => run === ocrRun;
   try {
     await loadOCR(); if (!isCurrent()) return;
-    const text = await recognizeText(globalThis.Tesseract,file,{
+    const text = await recognizeText(globalThis.Tesseract,await ocrSources(file),{
       workerPath:new URL('./vendor/worker.min.js',import.meta.url).href,
       corePath:new URL('./vendor/core/',import.meta.url).href,
       langPath:new URL('./vendor/lang',import.meta.url).href,
@@ -189,11 +227,12 @@ $('export-tracker').addEventListener('click',() => {
 $('import-tracker').addEventListener('click',() => $('import-file').click());
 $('import-file').addEventListener('change',async () => {
   try {
-    const uploaded = $('import-file').files[0]; if (!uploaded || uploaded.size > 2*1024*1024) throw new Error('invalidImport');
+    // 1000 игроков: 2000 символов заметки + 128 символов ника, включая JSON-экранирование.
+    const uploaded = $('import-file').files[0]; if (!uploaded || uploaded.size > 16*1024*1024) throw new Error('invalidImport');
     const data = JSON.parse(await uploaded.text()); if (data.version !== 1) throw new Error('invalidImport');
     const imported = normalizePlayers(data.players); const newPlayers = imported.filter(player => !players.some(existing => existing.steamid === player.steamid));
     if (players.length + newPlayers.length > 1000) throw new Error('invalidImport');
-    players.push(...newPlayers); persist(); renderTracker(); flash(t('importSuccess',{n:newPlayers.length}));
+    players.push(...newPlayers); const saved = persist(); if (!saved) players = players.filter(player => !newPlayers.includes(player)); renderTracker(); if (saved) flash(t('importSuccess',{n:newPlayers.length}));
   } catch { flash(t('invalidImport')); }
   finally { $('import-file').value = ''; }
 });
@@ -203,5 +242,5 @@ document.querySelectorAll('[data-filter]').forEach(button => button.addEventList
   renderTracker();
 }));
 document.addEventListener('settingschange',() => { renderResult(); renderTracker(); });
-window.addEventListener('storage',event => { if (event.key === TRACKER_KEY) { read(); renderTracker(); } });
+window.addEventListener('storage',event => { if (event.key === TRACKER_KEY || event.key === null) { read(); renderTracker(); } });
 window.addEventListener('pagehide',() => { if (previewUrl) URL.revokeObjectURL(previewUrl); ocrController?.abort(); });

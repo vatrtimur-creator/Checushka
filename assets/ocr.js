@@ -23,8 +23,13 @@ export async function recognizeText(engine, image, options, signal, timeoutMs = 
       }), stopped
     ]);
     await Promise.race([handle.setParameters({tessedit_pageseg_mode:'11'}), stopped]);
-    const {data} = await Promise.race([handle.recognize(image), stopped]);
-    return data.text;
+    const sources = Array.isArray(image) ? image : [image];
+    const texts = [];
+    for (const source of sources) {
+      const {data} = await Promise.race([handle.recognize(source), stopped]);
+      texts.push(data.text);
+    }
+    return texts.join('\n');
   } finally {
     clearTimeout(timer); signal.removeEventListener('abort', abort);
     nativeWorker?.terminate();

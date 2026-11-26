@@ -236,6 +236,13 @@ test('Steam extractor deduplicates in first-seen order and ignores invalid token
   assert.deepEqual(extractSteamIds(null), []);
 });
 
+test('Steam extractor recovers a validated ID from OCR-spaced and overlong digit runs', () => {
+  const id = '76561198755035987';
+  assert.deepEqual(extractSteamIds('OCR: 176561198755035987'), [id]);
+  assert.deepEqual(extractSteamIds('7656119 8755035987'), [id]);
+  assert.deepEqual(extractSteamIds('76561198755035987. 76561198755035987'), [id]);
+});
+
 test('calculations do not mutate the dataset or input rows', () => {
   const before = JSON.stringify([ITEMS, RAID_TARGETS, DATA_META.craftingItems]);
   const lines = [{ id: 'techparts', quantity: 1 }];
