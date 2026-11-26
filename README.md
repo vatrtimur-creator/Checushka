@@ -2,6 +2,8 @@
 
 Статическая утилита для Rust: идентификаторы Steam, локальные заметки по игрокам, расчёт рейда и переработки. HTML, CSS и JavaScript без фронтенд-фреймворков. Flask, SQLite и сервер не нужны: репозиторий можно целиком разместить на GitHub Pages.
 
+Исходники: [vatrtimur-creator/Checushka](https://github.com/vatrtimur-creator/Checushka).
+
 ## Локальный запуск
 
 ```sh
