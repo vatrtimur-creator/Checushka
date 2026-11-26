@@ -1,0 +1,64 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {readFile} from 'node:fs/promises';
+import {JSDOM} from 'jsdom';
+import {calculateRecycle} from '../assets/engine.js';
+const root = new URL('../',import.meta.url);
+async function mount(path,module) {
+  const dom = new JSDOM(await readFile(new URL(path,root),'utf8'),{url:`https://example.github.io/rust-util/${path}`});
+  globalThis.window = dom.window; globalThis.document = dom.window.document;
+  globalThis.localStorage = dom.window.localStorage; globalThis.Event = dom.window.Event;
+  await import(new URL(`assets/${module}.js`,root));
+  return {dom,$:id => dom.window.document.getElementById(id),event:name => new dom.window.Event(name,{bubbles:true,cancelable:true})};
+}
+test('raid page: labels, target-specific HP, input validation and EN settings',async () => {
+  const {$,event,dom} = await mount('raider/index.html','raider');
+  assert.equal($('target-material').value,'wall.stone');
+  assert.equal($('raid-results').querySelectorAll('.raid-card').length,3);
+  assert.match($('raid-results-title').textContent,/Модель/);
+  assert.match($('raid-results').querySelector('.notice').textContent,/13/);
+  $('target-type').value = 'door'; $('target-type').dispatchEvent(event('change'));
+  assert.ok([...$('target-material').options].every(option => option.textContent && option.textContent !== 'null'));
+  $('target-material').value = 'garage'; $('target-material').dispatchEvent(event('change'));
+  assert.match($('target-hp').textContent,/600/);
+  $('target-qty').value = '2'; $('target-qty').dispatchEvent(event('input')); assert.match($('target-hp').textContent,/1.200/);
+  $('target-qty').value = '0'; $('target-qty').dispatchEvent(event('input')); assert.equal($('raid-error').hidden,false);
+  $('desktop-language').value = 'en'; $('desktop-language').dispatchEvent(event('change')); assert.equal(dom.window.document.documentElement.lang,'en');
+  dom.window.close();
+});
+test('recycler page: search, basket aggregation and copying enablement',async () => {
+  const {$,event,dom} = await mount('recycler/index.html','recycler');
+  assert.ok($('item-select').options.length >= 60);
+  $('item-search').value = 'AK-47'; $('item-search').dispatchEvent(event('input')); assert.equal($('item-select').value,'rifle.ak');
+  $('item-qty').value = '2'; $('recycle-form').dispatchEvent(event('submit'));
+  assert.equal($('basket').querySelectorAll('.basket-row').length,1);
+  assert.equal($('copy-recycle').disabled,false);
+  const expected = calculateRecycle([{id:'rifle.ak',quantity:2}],'green'); assert.equal($('recycle-results').children.length,expected.outputs.length);
+  $('basket').querySelector('button').click(); assert.equal($('copy-recycle').disabled,true);
+  dom.window.close();
+});
+test('checker page: invalid ID, local tracking, notes, duplicate protection and XSS safety',async () => {
+  const {$,event,dom} = await mount('index.html','checker');
+  $('steamid').value = 'not-an-id'; $('check-form').dispatchEvent(event('submit')); assert.equal($('checker-error').hidden,false);
+  $('steamid').value = '76561198755035987'; $('check-form').dispatchEvent(event('submit')); assert.equal($('player-result').hidden,false);
+  assert.match($('player-result').textContent,/76561198755035987/);
+  $('add-id').value = '76561198755035987'; $('add-form').dispatchEvent(event('submit'));
+  assert.equal($('tracker-count').textContent,'1');
+  const note = $('tracker-list').querySelector('textarea'); note.value = '<script>alert(1)</script>'; note.dispatchEvent(event('input'));
+  assert.match(localStorage.getItem('rust-util:tracker:v1'),/<script>/); assert.equal($('tracker-list').querySelector('script'),null);
+  $('add-id').value = '76561198755035987'; $('add-form').dispatchEvent(event('submit')); assert.equal($('tracker-count').textContent,'1');
+  $('collapse-sidebar').click(); assert.equal(dom.window.document.body.classList.contains('sidebar-collapsed'),true);
+  $('desktop-theme').value = 'light'; $('desktop-theme').dispatchEvent(event('change')); assert.equal(dom.window.document.documentElement.dataset.theme,'light');
+  dom.window.document.querySelector('[data-filter=online]').click(); assert.equal($('tracker-list').querySelectorAll('.player-row').length,0);
+  dom.window.document.querySelector('[data-filter=unknown]').click(); assert.equal($('tracker-list').querySelectorAll('.player-row').length,1);
+  $('tracker-list').querySelector('button.danger').click(); assert.equal($('tracker-count').textContent,'0');
+  const oldFetch = globalThis.fetch; let release;
+  globalThis.fetch = () => new Promise(resolve => { release = resolve; });
+  $('desktop-api').value = 'https://api.example.com'; $('desktop-api').dispatchEvent(event('change'));
+  $('check-form').dispatchEvent(event('submit')); assert.equal($('check-form').querySelector('button').disabled,true);
+  $('desktop-api').value = ''; $('desktop-api').dispatchEvent(event('change'));
+  $('check-form').dispatchEvent(event('submit')); assert.equal($('check-form').querySelector('button').disabled,false);
+  release({ok:false}); await new Promise(resolve => setTimeout(resolve,0)); globalThis.fetch = oldFetch;
+  assert.equal($('check-form').querySelector('button').disabled,false);
+  dom.window.close();
+});

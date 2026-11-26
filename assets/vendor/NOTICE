@@ -1,0 +1,9 @@
+Rust Util local modifications, 2026-11-26
+
+Tesseract.js 6.0.1 is distributed under Apache License 2.0; see LICENSE.md.
+The vendored tesseract.min.js differs from the upstream package in two places:
+1. Initialization-chain failures reject the createWorker promise and terminate the worker instead of being swallowed.
+2. The optional onWorker callback exposes the native worker immediately after creation, allowing cancellation during initialization.
+
+scripts/vendor-ocr.py applies both exact, version-checked replacements reproducibly and records resulting SHA-256 checksums in manifest.json.
+Other bundled OCR files are not modified. The local OCR supervisor in assets/ocr.js imposes a 120-second deadline and releases native workers on cancellation, success and failure.
