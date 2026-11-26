@@ -241,6 +241,7 @@ test('Steam extractor recovers a validated ID from OCR-spaced and overlong digit
   assert.deepEqual(extractSteamIds('OCR: 176561198755035987'), [id]);
   assert.deepEqual(extractSteamIds('7656119 8755035987'), [id]);
   assert.deepEqual(extractSteamIds('76561198755035987. 76561198755035987'), [id]);
+  assert.deepEqual(extractSteamIds(':_}76561198755035987'), [id]);
 });
 
 test('calculations do not mutate the dataset or input rows', () => {

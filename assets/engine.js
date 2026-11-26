@@ -157,7 +157,7 @@ export function extractSteamIds(text) {
   // OCR can attach punctuation, split digits with spaces, or add one digit
   // at the edge of an otherwise correct run. Validate every 17-digit window;
   // the SteamID bit-field check remains mandatory and rejects arbitrary runs.
-  const nonUrlText = text.replace(/\S*[:/]\S*/g, ' ');
+  const nonUrlText = text.replace(/(?:https?|javascript):\S*/gi, ' ').replace(/\S*\/\S*/g, ' ');
   for (const run of nonUrlText.match(/[0-9][0-9\s.,:;|()[\]{}\-]{15,}[0-9]/g) ?? []) {
     const digits = run.replace(/\D/g, '');
     for (let start = 0; start + 17 <= digits.length; start++) add(digits.slice(start, start + 17));
